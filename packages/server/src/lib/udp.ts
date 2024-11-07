@@ -1,28 +1,21 @@
 import { createSocket } from "node:dgram";
 import { parseDNSRequest, encodeDNSResponse } from "@tinydns/protocol";
+import type Resolver from "@tinydns/resolver";
+
+const resolver = await import(process.env.RESOLVER_PROVIDER ?? "@tinydns/resolver");
+const resolverClass = resolver.default ? resolver.default : resolver;
+const resolverInstance = new resolverClass() as Resolver;
 
 const socket = createSocket("udp4");
 
-socket.on("message", (message, remote) => {
+socket.on("message", async (message, remote) => {
   try {
     const request = parseDNSRequest(new Uint8Array(message));
     console.log(`[DNS:SERVER:UDP][${new Date().toLocaleString()}] remote: ${remote.address}:${remote.port}, queries: ${request.questions.map(q => `${q.name} ${q.rClass} ${q.type}`).join(", ")}`)
 
-    const response = encodeDNSResponse({
-      transactionId: request.transactionId,
-      flags: 0x8180,
-      questions: request.questions,
-      answers: [{
-        name: request.questions[0].name,
-        type: 1, // A记录类型为1
-        ttl: 3600,
-        data: new Uint8Array([1, 2, 3, 4])
-      }],
-      authorities: [],
-      additional: [],
-    });
+    const response = await resolverInstance.resolve(request);
 
-    socket.send(response, remote.port, remote.address);
+    socket.send(encodeDNSResponse(response), remote.port, remote.address);
   } catch (error) {
     console.error(error);
   }

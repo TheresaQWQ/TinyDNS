@@ -11,11 +11,11 @@ export interface DNSRequest {
 }
 
 const parseDNSQuestion = (dataView: DataView, offset: number): DNSQuestion => {
-  const name = uint8ArrayToDomain(new Uint8Array(dataView.buffer, offset, dataView.getUint8(offset)));
-  const type = DNSQuestionType[dataView.getUint16(offset + 1, false)] as DNSQuestion['type'];
-  const rClass = DNSQuestionClass[dataView.getUint16(offset + 3, false)] as DNSQuestion['rClass'];
+  const [name, nameLength] = uint8ArrayToDomain(new Uint8Array(dataView.buffer, offset));
+  const type = DNSQuestionType[dataView.getUint16(offset + nameLength + 1, false)] as DNSQuestion['type'];
+  const rClass = DNSQuestionClass[dataView.getUint16(offset + nameLength + 3, false)] as DNSQuestion['rClass'];
 
-  return { name, type, rClass };
+  return { name, type, rClass, length: nameLength + 4 };
 };
 
 export function parseDNSRequest(data: Uint8Array): DNSRequest {
@@ -27,9 +27,11 @@ export function parseDNSRequest(data: Uint8Array): DNSRequest {
   const questions: DNSQuestion[] = [];
   const questionCount = dataView.getUint16(4, false);
 
+  let offset = 12
   for (let i = 0; i < questionCount; i++) {
-    const offset = 12 + i * 16;
-    questions.push(parseDNSQuestion(dataView, offset));
+    const question = parseDNSQuestion(dataView, offset);
+    questions.push(question);
+    offset += question.length;
   }
 
   return { transactionId, flags, questions };

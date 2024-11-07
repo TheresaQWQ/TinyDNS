@@ -12,137 +12,181 @@ export interface DNSResponse {
 }
 
 export const encodeDNSResponse = (response: DNSResponse): Uint8Array => {
-  const encodeHeader = (response: DNSResponse, buffer: Uint8Array, offset: number) => {
-    const header = new DataView(buffer.buffer, offset, 12);
+  const encodeHeader = (response: DNSResponse): Uint8Array => {
+    if (response.questions.length > 65535) throw new Error("Too many questions in DNS response");
+    if (response.answers.length > 65535) throw new Error("Too many answers in DNS response");
+    if (response.authorities.length > 65535) throw new Error("Too many authorities in DNS response");
+    if (response.additional.length > 65535) throw new Error("Too many additional records in DNS response");
+
+    const buffer = new Uint8Array(12);
+    const header = new DataView(buffer.buffer);
     header.setUint16(0, response.transactionId, false);
     header.setUint16(2, response.flags, false);
     header.setUint16(4, response.questions.length, false);
     header.setUint16(6, response.answers.length, false);
     header.setUint16(8, response.authorities.length, false);
     header.setUint16(10, response.additional.length, false);
-
-    return offset + 12;
+    return buffer;
   }
 
-  const encodeQuestions = (questions: DNSQuestion[], buffer: Uint8Array, offset: number) => {
+  const encodeQuestions = (questions: DNSQuestion[]): Uint8Array => {
+    let totalLength = 0;
     for (const question of questions) {
-      const question_offset = offset;
-      const question_data = new DataView(buffer.buffer, question_offset, 12);
-      question_data.setUint8(0, question.name.length);
-      question_data.setUint8(1, DNSQuestionType[question.type]);
-      question_data.setUint8(2, DNSQuestionClass[question.rClass]);
+      const [_, domainLength] = domainToUint8Array(question.name);
+      totalLength += domainLength + 4;
     }
 
-    return offset;
+    const buffer = new Uint8Array(totalLength);
+    let currentOffset = 0;
+
+    for (const question of questions) {
+      const [domainBytes, domainLength] = domainToUint8Array(question.name);
+      const domainDataView = new DataView(buffer.buffer, currentOffset, domainLength + 4);
+      
+      for (let i = 0; i < domainBytes.length; i++) {
+        domainDataView.setUint8(i, domainBytes.at(i) as number);
+      }
+
+      domainDataView.setUint16(domainLength, DNSQuestionType[question.type], false);
+      domainDataView.setUint16(domainLength + 2, DNSQuestionClass[question.rClass], false);
+
+      currentOffset += domainLength + 4;
+    }
+
+    return buffer;
   }
 
-  const encodeAnswers = (answers: DNSAnswer[], buffer: Uint8Array, offset: number) => {
-    let currentOffset = offset;
+  const encodeAnswers = (answers: DNSAnswer[]): Uint8Array => {
+    let totalLength = 0;
+    for (const answer of answers) {
+      const [_, domainLength] = domainToUint8Array(answer.name);
+      totalLength += domainLength + 10 + answer.data.length;
+    }
+
+    const buffer = new Uint8Array(totalLength);
+    let currentOffset = 0;
     
     for (const answer of answers) {
-      // 计算所需的总长度
-      const totalLength = answer.name.length + 10 + (answer.data instanceof Uint8Array ? answer.data.length : answer.data.length);
-      const answerData = new DataView(buffer.buffer, currentOffset, totalLength);
+      const [domainBytes, domainLength] = domainToUint8Array(answer.name);
+      const answerData = new DataView(buffer.buffer, currentOffset, domainLength + 10 + answer.data.length);
       
-      // 编码名称长度和内容
-      for (let i = 0; i < answer.name.length; i++) {
-        const uint8Array = domainToUint8Array(answer.name[i]);
-        for (let j = 0; j < uint8Array.length; j++) {
-          answerData.setUint8(answer.name.length + 1 + j, uint8Array[j]);
-        }
+      for (let i = 0; i < domainBytes.length; i++) {
+        answerData.setUint8(i, domainBytes.at(i) as number);
       }
-      // 编码类型、TTL和数据
-      answerData.setUint16(answer.name.length + 1, answer.type, false);
-      answerData.setUint32(answer.name.length + 3, answer.ttl, false);
-      
-      // 编码数据长度和内容
-      const dataLength = answer.data instanceof Uint8Array ? answer.data.length : answer.data.length;
-      answerData.setUint16(answer.name.length + 7, dataLength, false);
-      
+
+      answerData.setUint16(domainLength, answer.type, false);
+      answerData.setUint16(domainLength + 2, answer.rClass, false);
+      answerData.setUint32(domainLength + 4, answer.ttl, false);
+      answerData.setUint16(domainLength + 8, answer.data.length, false);
+
       if (answer.data instanceof Uint8Array) {
         for (let i = 0; i < answer.data.length; i++) {
-          answerData.setUint8(answer.name.length + 9 + i, answer.data[i]);
+          answerData.setUint8(domainLength + 10 + i, answer.data[i]);
         }
       } else {
         for (let i = 0; i < answer.data.length; i++) {
-          answerData.setUint8(answer.name.length + 9 + i, answer.data.charCodeAt(i));
+          answerData.setUint8(domainLength + 10 + i, answer.data.charCodeAt(i));
         }
       }
       
-      currentOffset += totalLength;
+      currentOffset += domainLength + 10 + answer.data.length;
     }
     
-    return currentOffset;
+    return buffer;
   }
 
-  const encodeAuthorities = (authorities: DNSAuthority[], buffer: Uint8Array, offset: number) => {
-    let currentOffset = offset;
+  const encodeAuthorities = (authorities: DNSAuthority[]): Uint8Array => {
+    let totalLength = 0;
+    for (const authority of authorities) {
+      const [_, domainLength] = domainToUint8Array(authority.name);
+      const [__, dataLength] = domainToUint8Array(authority.data);
+      totalLength += domainLength + 10 + dataLength;
+    }
+
+    const buffer = new Uint8Array(totalLength);
+    let currentOffset = 0;
     
     for (const authority of authorities) {
-      // 计算所需的总长度
-      const totalLength = authority.name.length + 10 + authority.data.length;
-      const authorityData = new DataView(buffer.buffer, currentOffset, totalLength);
+      const [domainBytes, domainLength] = domainToUint8Array(authority.name);
+      const [dataBytes, dataLength] = domainToUint8Array(authority.data);
+      const authorityData = new DataView(buffer.buffer, currentOffset, domainLength + 10 + dataLength);
       
-      authorityData.setUint8(0, authority.name.length);
-      for (let i = 0; i < authority.name.length; i++) {
-        authorityData.setUint8(1 + i, authority.name.charCodeAt(i));
+      for (let i = 0; i < domainBytes.length; i++) {
+        authorityData.setUint8(i, domainBytes[i]);
       }
       
-      authorityData.setUint16(authority.name.length + 1, authority.type, false);
-      authorityData.setUint32(authority.name.length + 3, authority.ttl, false);
+      authorityData.setUint16(domainLength, authority.type, false);
+      authorityData.setUint16(domainLength + 2, 1, false); // rClass固定为1 (IN)
+      authorityData.setUint32(domainLength + 4, authority.ttl, false);
+      authorityData.setUint16(domainLength + 8, dataLength, false);
       
-      authorityData.setUint16(authority.name.length + 7, authority.data.length, false);
-      for (let i = 0; i < authority.data.length; i++) {
-        authorityData.setUint8(authority.name.length + 9 + i, authority.data.charCodeAt(i));
+      for (let i = 0; i < dataBytes.length; i++) {
+        authorityData.setUint8(domainLength + 10 + i, dataBytes[i]);
       }
       
-      currentOffset += totalLength;
+      currentOffset += domainLength + 10 + dataLength;
     }
     
-    return currentOffset;
+    return buffer;
   }
 
-  const encodeAdditional = (additional: DNSAdditional[], buffer: Uint8Array, offset: number) => {
-    let currentOffset = offset;
+  const encodeAdditional = (additional: DNSAdditional[]): Uint8Array => {
+    let totalLength = 0;
+    for (const add of additional) {
+      const [_, domainLength] = domainToUint8Array(add.name);
+      const [__, dataLength] = domainToUint8Array(add.data);
+      totalLength += domainLength + 10 + dataLength;
+    }
+
+    const buffer = new Uint8Array(totalLength);
+    let currentOffset = 0;
     
     for (const add of additional) {
-      // 计算所需的总长度
-      const totalLength = add.name.length + 10 + add.data.length;
-      const addData = new DataView(buffer.buffer, currentOffset, totalLength);
+      const [domainBytes, domainLength] = domainToUint8Array(add.name);
+      const [dataBytes, dataLength] = domainToUint8Array(add.data);
+      const addData = new DataView(buffer.buffer, currentOffset, domainLength + 10 + dataLength);
       
-      addData.setUint8(0, add.name.length);
-      for (let i = 0; i < add.name.length; i++) {
-        addData.setUint8(1 + i, add.name.charCodeAt(i));
+      for (let i = 0; i < domainBytes.length; i++) {
+        addData.setUint8(i, domainBytes[i]);
       }
       
-      addData.setUint16(add.name.length + 1, add.type, false);
-      addData.setUint32(add.name.length + 3, add.ttl, false);
+      addData.setUint16(domainLength, add.type, false);
+      addData.setUint16(domainLength + 2, 1, false); // rClass固定为1 (IN)
+      addData.setUint32(domainLength + 4, add.ttl, false);
+      addData.setUint16(domainLength + 8, dataLength, false);
       
-      addData.setUint16(add.name.length + 7, add.data.length, false);
-      for (let i = 0; i < add.data.length; i++) {
-        addData.setUint8(add.name.length + 9 + i, add.data.charCodeAt(i));
+      for (let i = 0; i < dataBytes.length; i++) {
+        addData.setUint8(domainLength + 10 + i, dataBytes[i]);
       }
       
-      currentOffset += totalLength;
+      currentOffset += domainLength + 10 + dataLength;
     }
     
-    return currentOffset;
+    return buffer;
   }
-
-  // 计算总缓冲区大小
-  const totalSize = 12 + // 头部固定12字节
-    response.questions.reduce((acc, q) => acc + q.name.length + 4, 0) +
-    response.answers.reduce((acc, a) => acc + a.name.length + 10 + a.data.length, 0) +
-    response.authorities.reduce((acc, auth) => acc + auth.name.length + 10 + auth.data.length, 0) +
-    response.additional.reduce((acc, add) => acc + add.name.length + 10 + add.data.length, 0);
-
-  const buffer = new Uint8Array(totalSize);
   
-  let offset = encodeHeader(response, buffer, 0);
-  offset = encodeQuestions(response.questions, buffer, offset);
-  offset = encodeAnswers(response.answers, buffer, offset);
-  offset = encodeAuthorities(response.authorities, buffer, offset);
-  offset = encodeAdditional(response.additional, buffer, offset);
+  const headerBytes = encodeHeader(response);
+  const questionBytes = encodeQuestions(response.questions);
+  const answerBytes = encodeAnswers(response.answers);
+  const authorityBytes = encodeAuthorities(response.authorities);
+  const additionalBytes = encodeAdditional(response.additional);
 
-  return buffer;
+  const totalLength = headerBytes.length + questionBytes.length + 
+                     answerBytes.length + authorityBytes.length + 
+                     additionalBytes.length;
+  
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+
+  result.set(headerBytes, offset);
+  offset += headerBytes.length;
+  result.set(questionBytes, offset);
+  offset += questionBytes.length;
+  result.set(answerBytes, offset);
+  offset += answerBytes.length;
+  result.set(authorityBytes, offset);
+  offset += authorityBytes.length;
+  result.set(additionalBytes, offset);
+
+  return result;
 }

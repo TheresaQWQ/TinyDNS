@@ -1,11 +1,10 @@
 import type { DNSQuestionType, DNSQuestionClass } from "./types/question";
 
-type ItemOf<T> = T[keyof T];
-
 export interface DNSQuestion {
   name: string;
   type: keyof typeof DNSQuestionType;
   rClass: keyof typeof DNSQuestionClass;
+  length: number;
 }
 
 export interface DNSAnswer {
@@ -13,6 +12,7 @@ export interface DNSAnswer {
   type: number;
   ttl: number;
   data: string | Uint8Array;
+  rClass: number;
 }
 
 export interface DNSAuthority {
@@ -29,7 +29,30 @@ export interface DNSAdditional {
   data: string;
 }
 
-export const domainToUint8Array = (domain: string) => {
+export interface DNSFlags {
+  /** 是否为响应报文 */
+  isResponse?: boolean;
+  /** 操作码 */
+  operationCode?: number;
+  /** 是否为权威服务器 */
+  isAuthoritative?: boolean;
+  /** 是否被截断 */
+  isTruncated?: boolean;
+  /** 是否递归请求 */
+  recursionDesired?: boolean;
+  /** 是否递归可用 */
+  recursionAvailable?: boolean;
+  /** 保留位 */
+  z?: boolean;
+  /** 是否为认证回答 */
+  answerAuthenticated?: boolean;
+  /** 是否为非认证数据 */
+  nonAuthenticatedData?: boolean;
+  /** 响应码 */
+  replyCode?: number;
+}
+
+export const domainToUint8Array = (domain: string): [Uint8Array, number] => {
   const labels = domain.split(".");
   const result: number[] = [];
   
@@ -48,16 +71,21 @@ export const domainToUint8Array = (domain: string) => {
   // 添加结束标记0
   result.push(0);
 
-  return new Uint8Array(result);
+  const uint8Array = new Uint8Array(result);
+
+  return [uint8Array, uint8Array.length];
 }
 
-export const uint8ArrayToDomain = (uint8Array: Uint8Array) => {
+export const uint8ArrayToDomain = (uint8Array: Uint8Array): [string, number] => {
   const labels = [];
+  let length = 0;
 
   let offset = 0;
   while (true) {
     const labelLength = uint8Array[offset];
     if (labelLength === 0) break;
+
+    length += labelLength + 1;
     
     const label = [];
     for (let i = 0; i < labelLength; i++) {
@@ -68,5 +96,5 @@ export const uint8ArrayToDomain = (uint8Array: Uint8Array) => {
     offset += labelLength + 1;
   }
 
-  return labels.join('.');
+  return [labels.join('.'), length];
 }
