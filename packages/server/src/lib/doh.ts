@@ -16,8 +16,11 @@ app.post('/dns-query', async (c) => {
 
     const response = await resolverInstance.resolve(request);
     const responseData = encodeDNSResponse(response);
+    const arrayBuffer = new ArrayBuffer(responseData.byteLength);
+    const uint8Array = new Uint8Array(arrayBuffer);
+    uint8Array.set(responseData);
 
-    return c.body(responseData.buffer, 200, {
+    return c.body(arrayBuffer, 200, {
       'Content-Type': 'application/dns-message'
     });
   } catch (error) {
@@ -29,6 +32,10 @@ app.post('/dns-query', async (c) => {
 const port = Number.parseInt(process.env.SERVER_DOH_PORT ?? '443');
 const address = process.env.SERVER_DOH_ADDRESS ?? '0.0.0.0';
 
-app.listen(port, address, () => {
-  console.log(`[DNS:SERVER:DoH][${new Date().toLocaleString()}] Listening on ${address}:${port}`);
+Bun.serve({
+  fetch: app.fetch,
+  port,
+  hostname: address
 });
+
+console.log(`[DNS:SERVER:DoH][${new Date().toLocaleString()}] Listening on ${address}:${port}`);
