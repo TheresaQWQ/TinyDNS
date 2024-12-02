@@ -16,3 +16,4 @@ This project is organized as a monorepo with the following packages:
 - Support for various DNS record types (A, AAAA, CNAME, etc.)
 - UDP server support
 - Standard DNS query and response flow
+- DoH (DNS over HTTPS) support
